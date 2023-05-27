@@ -8,8 +8,8 @@ namespace CHDSharpTest;
 
 internal class Program
 {
-    const int threads = 2;
-    const int tasks = 6;
+    const int threads = 4;
+    const int tasks = 5;
     const bool useGC = false;
     const int useGC_seconds = 15;
 

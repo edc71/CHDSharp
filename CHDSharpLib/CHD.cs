@@ -63,7 +63,7 @@ public class mapentry
 public class CHD
 {
 
-    const int dedupe_usage_treshold = 25;
+    private int dedupe_usage_treshold = 25;
 
     public void TestCHD(CHD chd, string filename, int tasks)
     {
@@ -417,14 +417,13 @@ public class CHD
 
                         lock (mapEntry)
                         {
-                            buffOut = new byte[blockSize];
+                            buffOut = arraypools.arrBlockSize.Rent();
                             Interlocked.Increment(ref CHDCommon.repeatedblocks);
                             Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
                             Interlocked.Decrement(ref mapEntry.UseCount);
 
                             if (mapEntry.UseCount == 0)
                             {
-                                //ArrayPool<byte>.Shared.Return(mapEntry.buffOutCache);
                                 arrBlocksize.Return(mapEntry.buffOutCache);
                                 mapEntry.buffOutCache = null;
                             }
@@ -497,14 +496,16 @@ public class CHD
                         break;
                     }
                         default:
-
                     buffOut = null;
                     return chd_error.CHDERR_DECOMPRESSION_ERROR;
 
             }
 
             if (buffIn != null)
+            {
                 arraypools.arrBlockSize.Return(buffIn);
+                buffIn = null;
+            }
 
             if (checkCrc)
             {
