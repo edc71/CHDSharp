@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using CHDSharpLib.Utils;
 using Compress.Support.Compression.LZ;
 
 namespace Compress.Support.Compression.LZMA
@@ -22,98 +23,41 @@ namespace Compress.Support.Compression.LZMA
         private long inputPosition = 0;
 
         // LZMA2
-        private bool isLZMA2;
         private bool uncompressedChunk = false;
         private bool needDictReset = true;
         private bool needProps = true;
         private byte[] props = new byte[5];
 
-        private Encoder encoder;
+        //private Encoder encoder;
 
-        public LzmaStream(byte[] properties, Stream inputStream)
-            : this(properties, inputStream, -1, -1, null, properties.Length < 5)
+        public LzmaStream(byte[] properties, Stream inputStream, ArrayPool arrBlockSize)
+            : this(properties, inputStream, -1, -1, arrBlockSize)
         {
         }
 
-        public LzmaStream(byte[] properties, Stream inputStream, long inputSize)
-            : this(properties, inputStream, inputSize, -1, null, properties.Length < 5)
-        {
-        }
-
-        public LzmaStream(byte[] properties, Stream inputStream, long inputSize, long outputSize)
-            : this(properties, inputStream, inputSize, outputSize, null, properties.Length < 5)
-        {
-        }
-
-        public LzmaStream(byte[] properties, Stream inputStream, long inputSize, long outputSize,
-            Stream presetDictionary, bool isLZMA2)
+        public LzmaStream(byte[] properties, Stream inputStream, long inputSize, long outputSize , ArrayPool arrBlockSize)
         {
             this.inputStream = inputStream;
             this.inputSize = inputSize;
             this.outputSize = outputSize;
-            this.isLZMA2 = isLZMA2;
 
-            if (!isLZMA2)
-            {
-                dictionarySize = BitConverter.ToInt32(properties, 1);
-                outWindow.Create(dictionarySize);
-                if (presetDictionary != null)
-                    outWindow.Train(presetDictionary);
+            dictionarySize = BitConverter.ToInt32(properties, 1);
+            outWindow.Create(dictionarySize, arrBlockSize);
 
-                rangeDecoder.Init(inputStream);
+            rangeDecoder.Init(inputStream);
 
-                decoder = new Decoder();
-                decoder.SetDecoderProperties(properties);
-                props = properties;
+            decoder = new Decoder();
+            decoder.SetDecoderProperties(properties);
+            props = properties;
 
-                availableBytes = outputSize < 0 ? long.MaxValue : outputSize;
-                rangeDecoderLimit = inputSize;
-            }
-            else
-            {
-                dictionarySize = 2 | (properties[0] & 1);
-                dictionarySize <<= (properties[0] >> 1) + 11;
-
-                outWindow.Create(dictionarySize);
-                if (presetDictionary != null)
-                {
-                    outWindow.Train(presetDictionary);
-                    needDictReset = false;
-                }
-
-                props = new byte[1];
-                availableBytes = 0;
-            }
+            availableBytes = outputSize < 0 ? long.MaxValue : outputSize;
+            rangeDecoderLimit = inputSize;
         }
 
-        public LzmaStream(LzmaEncoderProperties properties, bool isLZMA2, Stream outputStream)
-            : this(properties, isLZMA2, null, outputStream)
-        {
-        }
-
-        public LzmaStream(LzmaEncoderProperties properties, bool isLZMA2, Stream presetDictionary, Stream outputStream)
-        {
-            this.isLZMA2 = isLZMA2;
-            availableBytes = 0;
-            endReached = true;
-
-            if (isLZMA2)
-                throw new NotImplementedException();
-
-            encoder = new Encoder();
-            encoder.SetCoderProperties(properties.propIDs, properties.properties);
-            MemoryStream propStream = new MemoryStream(5);
-            encoder.WriteCoderProperties(propStream);
-            props = propStream.ToArray();
-
-            encoder.SetStreams(null, outputStream, -1, -1);
-            if (presetDictionary != null)
-                encoder.Train(presetDictionary);
-        }
 
         public override bool CanRead
         {
-            get { return encoder == null; }
+            get { return true; }
         }
 
         public override bool CanSeek
@@ -123,7 +67,7 @@ namespace Compress.Support.Compression.LZMA
 
         public override bool CanWrite
         {
-            get { return encoder != null; }
+            get { return false; }
         }
 
         public override void Flush()
@@ -132,11 +76,8 @@ namespace Compress.Support.Compression.LZMA
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                if (encoder != null)
-                    position = encoder.Code(null, true);
-            }
+
+            outWindow.Dispose();
             base.Dispose(disposing);
         }
 
@@ -167,12 +108,7 @@ namespace Compress.Support.Compression.LZMA
             {
                 if (availableBytes == 0)
                 {
-                    if (isLZMA2)
-                        decodeChunkHeader();
-                    else
-                        endReached = true;
-                    if (endReached)
-                        break;
+                    break;
                 }
 
                 int toProcess = count - total;
@@ -180,11 +116,11 @@ namespace Compress.Support.Compression.LZMA
                     toProcess = (int)availableBytes;
 
                 outWindow.SetLimit(toProcess);
-                if(uncompressedChunk)
+                if (uncompressedChunk)
                 {
                     inputPosition += outWindow.CopyStream(inputStream, toProcess);
                 }
-                else if(decoder.Code(dictionarySize, outWindow, rangeDecoder)
+                else if (decoder.Code(dictionarySize, outWindow, rangeDecoder)
                         && outputSize < 0)
                 {
                     availableBytes = outWindow.AvailableBytes;
@@ -220,70 +156,73 @@ namespace Compress.Support.Compression.LZMA
 
         private void decodeChunkHeader()
         {
-            int control = inputStream.ReadByte();
-            inputPosition++;
-
-            if (control == 0x00)
+            unchecked
             {
-                endReached = true;
-                return;
-            }
+                int control = inputStream.ReadByte();
+                inputPosition++;
 
-            if (control >= 0xE0 || control == 0x01)
-            {
-                needProps = true;
-                needDictReset = false;
-                outWindow.Reset();
-            }
-            else if (needDictReset)
-                throw new DataErrorException();
-
-            if (control >= 0x80)
-            {
-                uncompressedChunk = false;
-
-                availableBytes = (control & 0x1F) << 16;
-                availableBytes += (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
-                inputPosition += 2;
-
-                rangeDecoderLimit = (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
-                inputPosition += 2;
-
-                if (control >= 0xC0)
+                if (control == 0x00)
                 {
-                    needProps = false;
-                    props[0] = (byte)inputStream.ReadByte();
-                    inputPosition++;
-
-                    decoder = new Decoder();
-                    decoder.SetDecoderProperties(props);
+                    endReached = true;
+                    return;
                 }
-                else if (needProps)
+
+                if (control >= 0xE0 || control == 0x01)
+                {
+                    needProps = true;
+                    needDictReset = false;
+                    outWindow.Reset();
+                }
+                else if (needDictReset)
                     throw new DataErrorException();
-                else if (control >= 0xA0)
-                {
-                    decoder = new Decoder();
-                    decoder.SetDecoderProperties(props);
-                }
 
-                rangeDecoder.Init(inputStream);
-            }
-            else if (control > 0x02)
-                throw new DataErrorException();
-            else
-            {
-                uncompressedChunk = true;
-                availableBytes = (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
-                inputPosition += 2;
+                if (control >= 0x80)
+                {
+                    uncompressedChunk = false;
+
+                    availableBytes = (control & 0x1F) << 16;
+                    availableBytes += (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
+                    inputPosition += 2;
+
+                    rangeDecoderLimit = (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
+                    inputPosition += 2;
+
+                    if (control >= 0xC0)
+                    {
+                        needProps = false;
+                        props[0] = (byte)inputStream.ReadByte();
+                        inputPosition++;
+
+                        decoder = new Decoder();
+                        decoder.SetDecoderProperties(props);
+                    }
+                    else if (needProps)
+                        throw new DataErrorException();
+                    else if (control >= 0xA0)
+                    {
+                        decoder = new Decoder();
+                        decoder.SetDecoderProperties(props);
+                    }
+
+                    rangeDecoder.Init(inputStream);
+                }
+                else if (control > 0x02)
+                    throw new DataErrorException();
+                else
+                {
+                    uncompressedChunk = true;
+                    availableBytes = (inputStream.ReadByte() << 8) + inputStream.ReadByte() + 1;
+                    inputPosition += 2;
+                }
             }
         }
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            if (origin!=SeekOrigin.Current)
-               throw new NotImplementedException();
+            if (origin != SeekOrigin.Current)
+                throw new NotImplementedException();
 
-            byte[] tmpBuff=new byte[1024];
+            byte[] tmpBuff = new byte[1024];
             long sizeToGo = offset;
             while (sizeToGo > 0)
             {
@@ -291,7 +230,7 @@ namespace Compress.Support.Compression.LZMA
                 Read(tmpBuff, 0, sizenow);
                 sizeToGo -= sizenow;
             }
-            
+
             return offset;
         }
 
@@ -302,8 +241,6 @@ namespace Compress.Support.Compression.LZMA
 
         public override void Write(byte[] buffer, int offset, int count)
         {
-            if (encoder != null)
-                position = encoder.Code(new MemoryStream(buffer, offset, count), false);
         }
 
         public byte[] Properties

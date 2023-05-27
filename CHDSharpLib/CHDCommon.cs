@@ -1,11 +1,12 @@
 ﻿using System;
+using System.Diagnostics;
 
 namespace CHDSharpLib;
 
-internal static class CHDCommon
+public static class CHDCommon
 {
 
-    internal static chd_codec compTypeConv(uint ct)
+    public static chd_codec compTypeConv(uint ct)
     {
         switch (ct)
         {
@@ -18,7 +19,7 @@ internal static class CHDCommon
     }
 
     /* Converts V3 & V4 mapFlags to V5 compression_type */
-    internal static compression_type ConvMapFlagstoCompressionType(mapFlags mapFlags)
+    public static compression_type ConvMapFlagstoCompressionType(mapFlags mapFlags)
     {
         switch (mapFlags & mapFlags.MAP_ENTRY_FLAG_TYPE_MASK)
         {
@@ -33,10 +34,13 @@ internal static class CHDCommon
         }
     }
 
+    public static long processedsize = 0;
+    public static Stopwatch sw = new Stopwatch();
+    public static int numberfiles;
+    public static int processedfiles = 0;
+    public static long maxmem = 0;
+    public static long repeatedblocks = 0;
 }
-
-
-
 
 public enum chd_codec
 {
@@ -112,7 +116,7 @@ public enum compression_type
 
 
 
-enum chd_error
+public enum chd_error
 {
     CHDERR_NONE,
     CHDERR_NO_INTERFACE,
@@ -143,3 +147,4 @@ enum chd_error
     CHDERR_NO_ASYNC_OPERATION,
     CHDERR_UNSUPPORTED_FORMAT
 };
+

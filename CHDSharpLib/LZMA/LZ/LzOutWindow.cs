@@ -1,3 +1,4 @@
+using CHDSharpLib.Utils;
 using Compress.Support.Compression.LZMA;
 
 namespace Compress.Support.Compression.LZ
@@ -12,15 +13,17 @@ namespace Compress.Support.Compression.LZ
         int _pendingDist;
         System.IO.Stream _stream;
 
+        ArrayPool _arrBlockSize = null;
         public long Total;
         public long Limit;
 
-        public void Create(int windowSize)
+        public void Create(int windowSize, ArrayPool arrBlockSize)
         {
+            _arrBlockSize = arrBlockSize;
             if (_windowSize != windowSize)
-                _buffer = new byte[windowSize];
-            else
-                _buffer[windowSize - 1] = 0;
+                if (_buffer == null)
+                    _buffer = _arrBlockSize.Rent();
+            _buffer[windowSize - 1] = 0;
             _windowSize = windowSize;
             _pos = 0;
             _streamPos = 0;
@@ -29,9 +32,18 @@ namespace Compress.Support.Compression.LZ
             Limit = 0;
         }
 
+        public void Dispose()
+        {
+            if (_buffer != null)
+            {
+                    _arrBlockSize.Return(_buffer);
+                _buffer = null;
+            }
+        }
+
         public void Reset()
         {
-            Create(_windowSize);
+            Create(_windowSize,_arrBlockSize);
         }
 
         public void Init(System.IO.Stream stream)
@@ -110,24 +122,27 @@ namespace Compress.Support.Compression.LZ
 
         public int CopyStream(System.IO.Stream stream, int len)
         {
-            int size = len;
-            while (size > 0 && _pos < _windowSize && Total < Limit)
+            unchecked
             {
-                int curSize = _windowSize - _pos;
-                if (curSize > Limit - Total)
-                    curSize = (int)(Limit - Total);
-                if (curSize > size)
-                    curSize = size;
-                int numReadBytes = stream.Read(_buffer, _pos, curSize);
-                if (numReadBytes == 0)
-                    throw new DataErrorException();
-                size -= numReadBytes;
-                _pos += numReadBytes;
-                Total += numReadBytes;
-                if (_pos >= _windowSize)
-                    Flush();
+                int size = len;
+                while (size > 0 && _pos < _windowSize && Total < Limit)
+                {
+                    int curSize = _windowSize - _pos;
+                    if (curSize > Limit - Total)
+                        curSize = (int)(Limit - Total);
+                    if (curSize > size)
+                        curSize = size;
+                    int numReadBytes = stream.Read(_buffer, _pos, curSize);
+                    if (numReadBytes == 0)
+                        throw new DataErrorException();
+                    size -= numReadBytes;
+                    _pos += numReadBytes;
+                    Total += numReadBytes;
+                    if (_pos >= _windowSize)
+                        Flush();
+                }
+                return len - size;
             }
-            return len - size;
         }
 
         public void SetLimit(long size)
@@ -183,4 +198,5 @@ namespace Compress.Support.Compression.LZ
             }
         }
     }
+    
 }

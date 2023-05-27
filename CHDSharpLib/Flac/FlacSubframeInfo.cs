@@ -15,25 +15,6 @@ namespace CUETools.Codecs.Flake
                 lpc_ctx[i] = new LpcContext();
         }
 
-        public void Init(int* s, int* r, int bps, int w)
-        {
-            if (w > bps)
-                throw new Exception("internal error");
-            samples = s;
-            obits = bps - w;
-            wbits = w;
-            for (int o = 0; o <= 4; o++)
-                best_fixed[o] = 0;
-            best.residual = r;
-            best.type = SubframeType.Verbatim;
-            best.size = AudioSamples.UINT32_MAX;
-            sf.Reset();
-            for (int iWindow = 0; iWindow < lpc.MAX_LPC_WINDOWS; iWindow++)
-                lpc_ctx[iWindow].Reset();
-            //sf.obits = obits;
-            done_fixed = 0;
-        }
-
         public FlacSubframe best;
         public int obits;
         public int wbits;

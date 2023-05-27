@@ -20,34 +20,40 @@ internal class HuffmanDecoderRLE : HuffmanDecoder
 
     public new uint DecodeOne()
     {
-        // return RLE data if we still have some
-        if (rlecount != 0)
+        unchecked
         {
-            rlecount--;
-            return prevdata;
-        }
+            // return RLE data if we still have some
+            if (rlecount != 0)
+            {
+                rlecount--;
+                return prevdata;
+            }
 
-        // fetch the data and process
-        uint data = base.DecodeOne();
-        if (data < 0x100)
-        {
-            prevdata += data;
-            return prevdata;
-        }
-        else
-        {
-            rlecount = CodeToRLECount((int)data);
-            rlecount--;
-            return prevdata;
+            // fetch the data and process
+            uint data = base.DecodeOne();
+            if (data < 0x100)
+            {
+                prevdata += data;
+                return prevdata;
+            }
+            else
+            {
+                rlecount = CodeToRLECount((int)data);
+                rlecount--;
+                return prevdata;
+            }
         }
     }
 
     public int CodeToRLECount(int code)
     {
-        if (code == 0x00)
-            return 1;
-        if (code <= 0x107)
-            return 8 + (code - 0x100);
-        return 16 << (code - 0x108);
+        unchecked
+        {
+            if (code == 0x00)
+                return 1;
+            if (code <= 0x107)
+                return 8 + (code - 0x100);
+            return 16 << (code - 0x108);
+        }
     }
 }

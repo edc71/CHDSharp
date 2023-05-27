@@ -40,12 +40,15 @@ public static class CRC16
 
     public static ushort calc(byte[] data, int length)
     {
-        ushort crc = 0xffff;
+        unchecked
+        {
+            ushort crc = 0xffff;
 
-        int index = 0;
-        /* fetch the current value into a local and rip through the source data */
-        while (index != length)
-            crc = (ushort)(crc << 8 ^ s_table[crc >> 8 ^ data[index++]]);
-        return crc;
+            int index = 0;
+            /* fetch the current value into a local and rip through the source data */
+            while (index != length)
+                crc = (ushort)(crc << 8 ^ s_table[crc >> 8 ^ data[index++]]);
+            return crc;
+        }
     }
 }

@@ -8,7 +8,6 @@ namespace CHDReaderTest.Flac.FlacDeps
         IAudioDecoderSettings Settings { get; }
 
         AudioPCMConfig PCM { get; }
-        string Path { get; }
 
         TimeSpan Duration { get; }
         long Length { get; }
@@ -32,34 +31,6 @@ namespace CHDReaderTest.Flac.FlacDeps
     public interface IAudioTitleSet
     {
         List<IAudioTitle> AudioTitles { get; }
-    }
-
-    public static class IAudioTitleExtensions
-    {
-        public static TimeSpan GetDuration(this IAudioTitle title)
-        {
-            var chapters = title.Chapters;
-            return chapters[chapters.Count - 1];
-        }
-
-
-        public static string GetRateString(this IAudioTitle title)
-        {
-            var sr = title.PCM.SampleRate;
-            if (sr % 1000 == 0) return $"{sr / 1000}KHz";
-            if (sr % 100 == 0) return $"{sr / 100}.{sr / 100 % 10}KHz";
-            return $"{sr}Hz";
-        }
-
-        public static string GetFormatString(this IAudioTitle title)
-        {
-            switch (title.PCM.ChannelCount)
-            {
-                case 1: return "mono";
-                case 2: return "stereo";
-                default: return "multi-channel";
-            }
-        }
     }
 
     public class SingleAudioTitle : IAudioTitle

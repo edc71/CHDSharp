@@ -1,8 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 
 namespace CHDSharpLib.Utils;
 
-internal class ArrayPool
+public class ArrayPool
 {
     private uint _arraySize;
     private List<byte[]> _array;
@@ -33,10 +34,14 @@ internal class ArrayPool
 
     internal void Return(byte[] ret)
     {
-        lock(_array)
+        lock (_array)
         {
-            _array.Add(ret);
-            _count++;
+            if (_array.Count < 24)
+            {
+                _array.Add(ret);
+                _count++;
+            }
         }
     }
+   
 }

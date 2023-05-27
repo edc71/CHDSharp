@@ -56,42 +56,44 @@ public class CRC
 
     public void SlurpBlock(byte[] block, int offset, int count)
     {
-        _totalBytesRead += count;
-        uint crc = _crc;
-
-        for (; (offset & 7) != 0 && count != 0; count--)
-            crc = (crc >> 8) ^ CRC32Lookup[(byte)crc ^ block[offset++]];
-
-        if (count >= 8)
+        unchecked
         {
-            int end = (count - 8) & ~7;
-            count -= end;
-            end += offset;
+            _totalBytesRead += count;
+            uint crc = _crc;
 
-            while (offset != end)
+            for (; (offset & 7) != 0 && count != 0; count--)
+                crc = (crc >> 8) ^ CRC32Lookup[(byte)crc ^ block[offset++]];
+
+            if (count >= 8)
             {
-                crc ^= (uint)(block[offset] + (block[offset + 1] << 8) + (block[offset + 2] << 16) + (block[offset + 3] << 24));
-                uint high = (uint)(block[offset + 4] + (block[offset + 5] << 8) + (block[offset + 6] << 16) + (block[offset + 7] << 24));
-                offset += 8;
+                int end = (count - 8) & ~7;
+                count -= end;
+                end += offset;
 
-                crc = CRC32Lookup[(byte)crc + 0x700]
-                      ^ CRC32Lookup[(byte)(crc >>= 8) + 0x600]
-                      ^ CRC32Lookup[(byte)(crc >>= 8) + 0x500]
-                      ^ CRC32Lookup[ /*(byte)*/(crc >> 8) + 0x400]
-                      ^ CRC32Lookup[(byte)high + 0x300]
-                      ^ CRC32Lookup[(byte)(high >>= 8) + 0x200]
-                      ^ CRC32Lookup[(byte)(high >>= 8) + 0x100]
-                      ^ CRC32Lookup[ /*(byte)*/(high >> 8) + 0x000];
+                while (offset != end)
+                {
+                    crc ^= (uint)(block[offset] + (block[offset + 1] << 8) + (block[offset + 2] << 16) + (block[offset + 3] << 24));
+                    uint high = (uint)(block[offset + 4] + (block[offset + 5] << 8) + (block[offset + 6] << 16) + (block[offset + 7] << 24));
+                    offset += 8;
+
+                    crc = CRC32Lookup[(byte)crc + 0x700]
+                          ^ CRC32Lookup[(byte)(crc >>= 8) + 0x600]
+                          ^ CRC32Lookup[(byte)(crc >>= 8) + 0x500]
+                          ^ CRC32Lookup[ /*(byte)*/(crc >> 8) + 0x400]
+                          ^ CRC32Lookup[(byte)high + 0x300]
+                          ^ CRC32Lookup[(byte)(high >>= 8) + 0x200]
+                          ^ CRC32Lookup[(byte)(high >>= 8) + 0x100]
+                          ^ CRC32Lookup[ /*(byte)*/(high >> 8) + 0x000];
+                }
             }
+
+            while (count-- != 0)
+            {
+                crc = (crc >> 8) ^ CRC32Lookup[(byte)crc ^ block[offset++]];
+            }
+
+            _crc = crc;
         }
-
-        while (count-- != 0)
-        {
-            crc = (crc >> 8) ^ CRC32Lookup[(byte)crc ^ block[offset++]];
-        }
-
-        _crc = crc;
-
     }
 
     public byte[] Crc32ResultB

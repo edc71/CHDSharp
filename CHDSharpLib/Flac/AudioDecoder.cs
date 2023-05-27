@@ -213,14 +213,6 @@ namespace CUETools.Codecs.Flake
 			}
 		}
 
-		public string Path
-		{
-			get
-			{
-				return _path;
-			}
-		}
-
 		unsafe void interlace(AudioBuffer buff, int offset, int count)
 		{
 			if (PCM.ChannelCount == 2)
