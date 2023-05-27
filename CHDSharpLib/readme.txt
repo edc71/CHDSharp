@@ -6,5 +6,6 @@
 - deduped blocks in memory. keeping them all makes memory allocation very jumpy.. introduced a threshold (currently 25)
 	(CHD.cs, line 66)
 - Introduced a arraypools class in CHD.cs, which is passed on when needed to the blockreaders
+- stripped a lot of lzma code, want to get rid of the lzma stream
 
 overall a little bit slower, but more steady memory usage
