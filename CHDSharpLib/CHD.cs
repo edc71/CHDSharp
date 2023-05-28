@@ -188,17 +188,10 @@ public class CHD
 
         Task producerThread = Task.Factory.StartNew(() =>
         {
-            uint blockPercent = chdheader.totalblocks / 100;
-            if (blockPercent == 0)
-                blockPercent = 1;
             for (int block = 0; block < chdheader.totalblocks; block++)
             {
                 if (errMaster != chd_error.CHDERR_NONE)
                     break;
-
-                /* progress */
-                //if ((block % blockPercent) == 0)
-                //    Console.Write($"Verifying, {(long)block * 100 / chd.totalblocks:N1}% complete...Load buffer: {bCollection.Count} Hash buffer: {bCleanup.Count}   \r");
 
                 mapentry mapentry = chdheader.map[block];
                 bCollection.Add(block);
@@ -208,8 +201,6 @@ public class CHD
         });
 
         Task[] consumerThread = new Task[taskCount];
-
-        arrBlockSize = new ArrayPool(chdheader.blocksize);
         
         for (int i = 0; i < taskCount; i++)
         {

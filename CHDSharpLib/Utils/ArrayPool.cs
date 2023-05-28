@@ -50,9 +50,9 @@ public class ArrayPool
 
     internal void Return(byte[] ret)
     {
-        _returnedArraysTotal++;
         lock (_array)
         {
+            _returnedArraysTotal++;
             if (_array.Count < 128)
             {
                 _array.Add(ret);
