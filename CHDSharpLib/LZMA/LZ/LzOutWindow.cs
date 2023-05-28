@@ -11,7 +11,6 @@ namespace Compress.Support.Compression.LZ
         int _streamPos;
         int _pendingLen;
         int _pendingDist;
-        System.IO.Stream _stream;
 
         ArrayPool _arrBlockSize = null;
         public long Total;
@@ -41,48 +40,8 @@ namespace Compress.Support.Compression.LZ
             }
         }
 
-        public void Reset()
-        {
-            Create(_windowSize,_arrBlockSize);
-        }
-
-        public void Init(System.IO.Stream stream)
-        {
-            ReleaseStream();
-            _stream = stream;
-        }
-
-        public void Train(System.IO.Stream stream)
-        {
-            long len = stream.Length;
-            int size = (len < _windowSize) ? (int)len : _windowSize;
-            stream.Position = len - size;
-            Total = 0;
-            Limit = size;
-            _pos = _windowSize - size;
-            CopyStream(stream, size);
-            if (_pos == _windowSize)
-                _pos = 0;
-            _streamPos = _pos;
-        }
-
-        public void ReleaseStream()
-        {
-            Flush();
-            _stream = null;
-        }
-
         public void Flush()
         {
-            if (_stream == null)
-                return;
-            int size = _pos - _streamPos;
-            if (size == 0)
-                return;
-            _stream.Write(_buffer, _streamPos, size);
-            if (_pos >= _windowSize)
-                _pos = 0;
-            _streamPos = _pos;
         }
 
         public void CopyBlock(int distance, int len)
@@ -120,30 +79,6 @@ namespace Compress.Support.Compression.LZ
             return _buffer[pos];
         }
 
-        public int CopyStream(System.IO.Stream stream, int len)
-        {
-            unchecked
-            {
-                int size = len;
-                while (size > 0 && _pos < _windowSize && Total < Limit)
-                {
-                    int curSize = _windowSize - _pos;
-                    if (curSize > Limit - Total)
-                        curSize = (int)(Limit - Total);
-                    if (curSize > size)
-                        curSize = size;
-                    int numReadBytes = stream.Read(_buffer, _pos, curSize);
-                    if (numReadBytes == 0)
-                        throw new DataErrorException();
-                    size -= numReadBytes;
-                    _pos += numReadBytes;
-                    Total += numReadBytes;
-                    if (_pos >= _windowSize)
-                        Flush();
-                }
-                return len - size;
-            }
-        }
 
         public void SetLimit(long size)
         {

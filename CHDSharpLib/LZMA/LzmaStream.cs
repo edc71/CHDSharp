@@ -5,7 +5,7 @@ using Compress.Support.Compression.LZ;
 
 namespace Compress.Support.Compression.LZMA
 {
-    public class LzmaStream : Stream
+    public class LzmaStream
     {
         private Stream inputStream;
         private long inputSize;
@@ -32,7 +32,7 @@ namespace Compress.Support.Compression.LZMA
         {
         }
 
-        public LzmaStream(byte[] properties, Stream inputStream, long inputSize, long outputSize , ArrayPool arrBlockSize)
+        public LzmaStream(byte[] properties, Stream inputStream, long inputSize, long outputSize, ArrayPool arrBlockSize)
         {
             this.inputStream = inputStream;
             this.inputSize = inputSize;
@@ -50,51 +50,13 @@ namespace Compress.Support.Compression.LZMA
             rangeDecoderLimit = inputSize;
         }
 
-
-        public override bool CanRead
-        {
-            get { return true; }
-        }
-
-        public override bool CanSeek
-        {
-            get { return false; }
-        }
-
-        public override bool CanWrite
-        {
-            get { return false; }
-        }
-
-        public override void Flush()
-        {
-        }
-
-        protected override void Dispose(bool disposing)
+        public void Dispose()
         {
 
             outWindow.Dispose();
-            base.Dispose(disposing);
         }
 
-        public override long Length
-        {
-            get { return position + availableBytes; }
-        }
-
-        public override long Position
-        {
-            get
-            {
-                return position;
-            }
-            set
-            {
-                throw new NotImplementedException();
-            }
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
+        public int Read(byte[] buffer, int offset, int count)
         {
             if (endReached)
                 return 0;
@@ -111,9 +73,9 @@ namespace Compress.Support.Compression.LZMA
                 if (toProcess > availableBytes)
                     toProcess = (int)availableBytes;
 
-               outWindow.SetLimit(toProcess);
-               if (decoder.Code(dictionarySize, outWindow, rangeDecoder)
-                        && outputSize < 0)
+                outWindow.SetLimit(toProcess);
+                if (decoder.Code(dictionarySize, outWindow, rangeDecoder)
+                         && outputSize < 0)
                 {
                     availableBytes = outWindow.AvailableBytes;
                 }
@@ -144,21 +106,6 @@ namespace Compress.Support.Compression.LZMA
             }
 
             return total;
-        }
-
-
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void SetLength(long value)
-        {
-            throw new NotImplementedException();
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
         }
     }
 }

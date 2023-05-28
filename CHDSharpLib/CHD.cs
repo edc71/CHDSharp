@@ -223,7 +223,8 @@ public class CHD
                     if (block == -1)
                         return;
                     mapentry mapEntry = chdheader.map[block];
-                    chd_error err = ReadBlock(arrBlockSize, chd, file, mapEntry, chdheader.compression, codec, (int)chdheader.blocksize, false, out byte[] buffOut);
+                    byte[] buffOut = arrBlockSize.Rent();
+                    chd_error err = ReadBlock(arrBlockSize, chd, file, mapEntry, chdheader.compression, codec, (int)chdheader.blocksize, false, ref buffOut);
                     mapEntry.buffOut = buffOut;
                     if (err != chd_error.CHDERR_NONE)
                     {
@@ -261,7 +262,6 @@ public class CHD
                     md5Check?.TransformBlock(mapentry.buffOut, 0, sizenext, null, 0);
                     sha1Check?.TransformBlock(mapentry.buffOut, 0, sizenext, null, 0);
 
-                    //ArrayPool<byte>.Shared.Return(mapentry.buffOut);
                     arrBlockSize.Return(mapentry.buffOut);
                     mapentry.buffOut = null;
 
@@ -324,7 +324,8 @@ public class CHD
                 break;
 
             mapentry me = chdr.map[dupe.block];
-            chd_error err = ReadBlock(arrBlockSize, chd, file, me, chdr.compression, codec, (int)chdr.blocksize, true, out byte[] buffOut);
+            byte[] buffOut = arrBlockSize.Rent();
+            chd_error err = ReadBlock(arrBlockSize, chd, file, me, chdr.compression, codec, (int)chdr.blocksize, true, ref buffOut);
             if (err != chd_error.CHDERR_NONE)
                 return err;
 
@@ -361,10 +362,9 @@ public class CHD
             Interlocked.Increment(ref totalFound);
         });
 
-        //Console.WriteLine($"Total Blocks {chd.map.Length}, Repeat Blocks {totalFound}");
     }
 
-    public chd_error ReadBlock(ArrayPool arrBlockSize,CHD chd, Stream file, mapentry mapEntry, chd_codec[] compression, CHDCodec codec, int buffOutLength, bool preload,  out byte[] buffOut)
+    public chd_error ReadBlock(ArrayPool arrBlockSize,CHD chd, Stream file, mapentry mapEntry, chd_codec[] compression, CHDCodec codec, int buffOutLength, bool preload,  ref byte[] buffOut)
     {
         try
         {
@@ -391,9 +391,6 @@ public class CHD
                     {
                         lock (mapEntry)
                         {
-                            //buffOut = ArrayPool<byte>.Shared.Rent((int)blockSize);
-                            buffOut = arrBlockSize.Rent();
-
                             if (mapEntry.buffOutCache == null)
                             {
                                 chd_error ret = chd_error.CHDERR_UNSUPPORTED_FORMAT;
@@ -441,7 +438,6 @@ public class CHD
                             }
                             else
                             {
-                                //buffOut = arrBlockSize.Rent();
                                 Interlocked.Increment(ref CHDCommon.repeatedblocks);
                                 Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
                                 Interlocked.Decrement(ref mapEntry.UseCount);
@@ -461,7 +457,6 @@ public class CHD
                     }
                 case compression_type.COMPRESSION_NONE:
                     {
-                        buffOut = arrBlockSize.Rent();
                         lock (mapEntry)
                         {
                             if (mapEntry.buffOutCache == null)
@@ -471,7 +466,6 @@ public class CHD
 
                                 if (mapEntry.UseCount > 0 && !preload && codec.totalbuffersize + blockSize < maxbuffersize)
                                 {
-                                    //mapEntry.buffOutCache = new byte[blockSize];
                                     mapEntry.buffOutCache = arrBlockSize.Rent();
                                     Array.Copy(buffOut, 0, mapEntry.buffOutCache, 0, blockSize);
                                     codec.totalbuffersize += blockSize;
@@ -479,7 +473,6 @@ public class CHD
                             }
                             else
                             {
-                                //buffOut = mapEntry.buffOutCache;
                                 Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
                                 Interlocked.Decrement(ref mapEntry.UseCount);
                                 if (mapEntry.UseCount == 0)
@@ -497,7 +490,6 @@ public class CHD
 
                 case compression_type.COMPRESSION_MINI:
                     {
-                        buffOut = arrBlockSize.Rent();
                         Array.Clear(buffOut, 0, (int)blockSize);
                         byte[] tmp = BitConverter.GetBytes(mapEntry.offset);
                         for (int i = 0; i < 8; i++)
@@ -515,15 +507,13 @@ public class CHD
 
                 case compression_type.COMPRESSION_SELF:
                     {
-                        chd_error retcs = ReadBlock(arrBlockSize, chd, file, mapEntry.selfMapEntry, compression, codec, buffOutLength, false, out byte[] buf);
-                        buffOut = buf;
+                        chd_error retcs = ReadBlock(arrBlockSize, chd, file, mapEntry.selfMapEntry, compression, codec, buffOutLength, false, ref buffOut);
                         if (retcs != chd_error.CHDERR_NONE)
                             return retcs;
                         checkCrc = false;
                         break;
                     }
                 default:
-                    buffOut = null;
                     return chd_error.CHDERR_DECOMPRESSION_ERROR;
 
             }
@@ -604,7 +594,7 @@ public class CHD
             properties[1 + j] = (Byte)((dictionarySize >> (8 * j)) & 0xFF);
 
         using var memStream = new MemoryStream(buffIn, start, compsize);
-        using Stream compStream = new LzmaStream(properties, memStream, arrBlockSize);
+        LzmaStream compStream = new LzmaStream(properties, memStream, arrBlockSize);
         int bytesRead = 0;
         while (bytesRead < buffOutLength)
         {
@@ -614,6 +604,8 @@ public class CHD
             bytesRead += bytes;
         }
 
+        compStream.Dispose();
+        
         return chd_error.CHDERR_NONE;
     }
 
