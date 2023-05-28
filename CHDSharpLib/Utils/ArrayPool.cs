@@ -8,7 +8,6 @@ public class ArrayPool
 {
     private uint _arraySize;
     private List<byte[]> _array;
-    private int _count;
     private int _issuedArraysTotal;
     private int _returnedArraysTotal;
 
@@ -16,17 +15,21 @@ public class ArrayPool
     {
         _array = new List<byte[]>();
         _arraySize = arraySize;
-        _count = 0;
         _issuedArraysTotal = 0;
         _returnedArraysTotal = 0;
     }
 
     internal void Destroy()
     {
-        Console.WriteLine("rented: " + _issuedArraysTotal.ToString() + ", returned: " + _returnedArraysTotal.ToString() + "                ");
+        PrintStats();
         _array.Clear();
         _array = null;
         GC.Collect();
+    }
+
+    internal void PrintStats()
+    {
+        Console.WriteLine("rented: " + _issuedArraysTotal.ToString() + ", returned: " + _returnedArraysTotal.ToString() + ", diff: " + (_issuedArraysTotal - _returnedArraysTotal).ToString() + ", lost: " + _arraySize * (_issuedArraysTotal - _returnedArraysTotal));
     }
 
     internal byte[] Rent()
@@ -34,15 +37,13 @@ public class ArrayPool
         lock (_array)
         {
             _issuedArraysTotal++;
-            if (_count == 0)
+            if (_array.Count == 0)
             {
                 return new byte[_arraySize];
             }
-
-            _count--;
             
-            byte[] ret = _array[_count];
-            _array.RemoveAt(_count);
+            byte[] ret = _array[0];
+            _array.RemoveAt(0);
             return ret;
         }
     }
@@ -52,10 +53,9 @@ public class ArrayPool
         _returnedArraysTotal++;
         lock (_array)
         {
-            if (_array.Count < 256)
+            if (_array.Count < 128)
             {
                 _array.Add(ret);
-                _count++;
             }
         }
     }

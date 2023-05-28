@@ -9,8 +9,8 @@ namespace CHDSharpTest;
 
 internal class Program
 {
-    const int threads = 4;
-    const int tasks = 5;
+    const int threads =4;
+    const int tasks = 6;
     const bool useGC = false;
     const int useGC_seconds = 15;
 
@@ -74,6 +74,7 @@ internal class Program
                         f = files.Dequeue();
                     }
                     CHD chd = new CHD();
+                    Console.WriteLine(f.FullName);
                     chd.TestCHD(chd, f.FullName, tasks);
                 }
             });
