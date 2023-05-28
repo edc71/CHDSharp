@@ -1,4 +1,5 @@
 ﻿using CHDSharpLib;
+using CHDSharpLib.Utils;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Runtime.InteropServices;

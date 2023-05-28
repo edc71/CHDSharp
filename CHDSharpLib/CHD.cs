@@ -38,11 +38,6 @@ public class PreLoadBlockHelper
     public int UseCount;
 }
 
-public class ArrayPools
-{
-    public ArrayPool arrBlockSize;
-}
-
 public class mapentry
 {
     public compression_type comptype;
@@ -175,18 +170,13 @@ public class CHD
         }
     }
 
-    ArrayPool arrBlockSize = null;
-
     public chd_error DecompressDataParallel(CHD chd, Stream file, CHDHeader chdheader, int tasks)
     {
-        arrBlockSize = new ArrayPool(chdheader.blocksize);
-
+        ArrayPool arrBlockSize = new ArrayPool(chdheader.blocksize);
         //using BinaryReader br = new BinaryReader(file, Encoding.UTF8, true);
 
         CHDCodec preloadcodec = new CHDCodec();
         chd_error err = PreLoadRepeatedBlocks(chd, chdheader, file, arrBlockSize, preloadcodec);
-
-
 
         using MD5 md5Check = chdheader.md5 != null ? MD5.Create() : null;
         using SHA1 sha1Check = chdheader.rawsha1 != null ? SHA1.Create() : null;
@@ -290,6 +280,9 @@ public class CHD
         Task.WaitAll(cleanupThread);
 
         //Console.WriteLine($"Verifying, 100% complete.");
+        
+        arrBlockSize.Destroy();
+        arrBlockSize = null;
 
         if (errMaster != chd_error.CHDERR_NONE)
             return errMaster;
@@ -382,7 +375,6 @@ public class CHD
             {
                 lock (file)
                 {
-                    //buffIn = ArrayPool<byte>.Shared.Rent((int)mapEntry.length);
                     buffIn = arrBlockSize.Rent();
                     file.Seek((long)mapEntry.offset, SeekOrigin.Begin);
                     file.Read(buffIn, 0, (int)mapEntry.length);
@@ -449,7 +441,7 @@ public class CHD
                             }
                             else
                             {
-                                buffOut = arrBlockSize.Rent();
+                                //buffOut = arrBlockSize.Rent();
                                 Interlocked.Increment(ref CHDCommon.repeatedblocks);
                                 Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
                                 Interlocked.Decrement(ref mapEntry.UseCount);
@@ -469,12 +461,12 @@ public class CHD
                     }
                 case compression_type.COMPRESSION_NONE:
                     {
+                        buffOut = arrBlockSize.Rent();
                         lock (mapEntry)
                         {
                             if (mapEntry.buffOutCache == null)
                             {
                                 Interlocked.Increment(ref CHDCommon.repeatedblocks);
-                                buffOut = arrBlockSize.Rent();
                                 Array.Copy(buffIn, buffOut, buffOutLength);
 
                                 if (mapEntry.UseCount > 0 && !preload && codec.totalbuffersize + blockSize < maxbuffersize)
@@ -484,22 +476,23 @@ public class CHD
                                     Array.Copy(buffOut, 0, mapEntry.buffOutCache, 0, blockSize);
                                     codec.totalbuffersize += blockSize;
                                 }
-                                break;
                             }
-
-                            //buffOut = mapEntry.buffOutCache;
-                            buffOut = arrBlockSize.Rent();
-                            Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
-                            Interlocked.Decrement(ref mapEntry.UseCount);
-                            if (mapEntry.UseCount == 0)
+                            else
                             {
-                                arrBlockSize.Return(mapEntry.buffOutCache);
-                                mapEntry.buffOutCache = null;
-                                codec.totalbuffersize -= blockSize;
+                                //buffOut = mapEntry.buffOutCache;
+                                Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
+                                Interlocked.Decrement(ref mapEntry.UseCount);
+                                if (mapEntry.UseCount == 0)
+                                {
+                                    arrBlockSize.Return(mapEntry.buffOutCache);
+                                    mapEntry.buffOutCache = null;
+                                    codec.totalbuffersize -= blockSize;
+                                }
+                                checkCrc = false;
                             }
-                            checkCrc = false;
-                            break;
                         }
+                        break;
+
                     }
 
                 case compression_type.COMPRESSION_MINI:

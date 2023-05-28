@@ -36,7 +36,7 @@ namespace Compress.Support.Compression.LZ
         {
             if (_buffer != null)
             {
-                    _arrBlockSize.Return(_buffer);
+                _arrBlockSize.Return(_buffer);
                 _buffer = null;
             }
         }
