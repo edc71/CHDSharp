@@ -4,9 +4,11 @@ using Compress.Support.Compression.LZMA;
 using CUETools.Codecs.Flake;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -30,11 +32,15 @@ public class CHDHeader
     public ulong metaoffset;
 }
 
+public class PreLoadBlockHelper
+{
+    public int block;
+    public int UseCount;
+}
+
 public class ArrayPools
 {
     public ArrayPool arrBlockSize;
-    public ArrayPool arrBSector;
-    public ArrayPool arrBSubcode;
 }
 
 public class mapentry
@@ -63,7 +69,7 @@ public class mapentry
 public class CHD
 {
 
-    private int dedupe_usage_treshold = 25;
+    //private int dedupe_usage_treshold = 25;
 
     public void TestCHD(CHD chd, string filename, int tasks)
     {
@@ -169,16 +175,18 @@ public class CHD
         }
     }
 
-    ArrayPool arrBlocksize = null;
-    ArrayPool arrCDSector = null;
-    ArrayPool arrCDSubcode = null;
+    ArrayPool arrBlockSize = null;
+
     public chd_error DecompressDataParallel(CHD chd, Stream file, CHDHeader chdheader, int tasks)
     {
-        arrBlocksize = new ArrayPool(chdheader.blocksize);
-        arrCDSector = new ArrayPool(8 * CD_MAX_SECTOR_DATA);
-        arrCDSubcode = new ArrayPool(8 * CD_MAX_SUBCODE_DATA);
+        arrBlockSize = new ArrayPool(chdheader.blocksize);
 
-        using BinaryReader br = new BinaryReader(file, Encoding.UTF8, true);
+        //using BinaryReader br = new BinaryReader(file, Encoding.UTF8, true);
+
+        CHDCodec preloadcodec = new CHDCodec();
+        chd_error err = PreLoadRepeatedBlocks(chd, chdheader, file, arrBlockSize, preloadcodec);
+
+
 
         using MD5 md5Check = chdheader.md5 != null ? MD5.Create() : null;
         using SHA1 sha1Check = chdheader.rawsha1 != null ? SHA1.Create() : null;
@@ -211,10 +219,7 @@ public class CHD
 
         Task[] consumerThread = new Task[taskCount];
 
-        ArrayPools arrPools = new ArrayPools();
-        arrPools.arrBlockSize = new ArrayPool(chdheader.blocksize);
-        arrPools.arrBSector = new ArrayPool(8 * CD_MAX_SECTOR_DATA);
-        arrPools.arrBSubcode = new ArrayPool(8 * CD_MAX_SUBCODE_DATA);
+        arrBlockSize = new ArrayPool(chdheader.blocksize);
         
         for (int i = 0; i < taskCount; i++)
         {
@@ -228,7 +233,7 @@ public class CHD
                     if (block == -1)
                         return;
                     mapentry mapEntry = chdheader.map[block];
-                    chd_error err = ReadBlock(arrPools, chd, file, mapEntry, chdheader.compression, codec, (int)chdheader.blocksize, out byte[] buffOut);
+                    chd_error err = ReadBlock(arrBlockSize, chd, file, mapEntry, chdheader.compression, codec, (int)chdheader.blocksize, false, out byte[] buffOut);
                     mapEntry.buffOut = buffOut;
                     if (err != chd_error.CHDERR_NONE)
                     {
@@ -267,7 +272,7 @@ public class CHD
                     sha1Check?.TransformBlock(mapentry.buffOut, 0, sizenext, null, 0);
 
                     //ArrayPool<byte>.Shared.Return(mapentry.buffOut);
-                    arrBlocksize.Return(mapentry.buffOut);
+                    arrBlockSize.Return(mapentry.buffOut);
                     mapentry.buffOut = null;
 
                     /* prepare for the next block */
@@ -306,7 +311,38 @@ public class CHD
         return chd_error.CHDERR_NONE;
     }
 
-    public void FindRepeatedBlocks(CHDHeader chdr, Stream file)
+    //maximum mem used for caching dupe blocks
+    const ulong maxbuffersize = 1 * 1024 * 1024 * 1024;
+    
+    //private ulong totalbuffersize = 0;
+
+    private chd_error PreLoadRepeatedBlocks(CHD chd, CHDHeader chdr, Stream file, ArrayPool arrBlockSize, CHDCodec codec)
+    {
+        List<PreLoadBlockHelper> list = new List<PreLoadBlockHelper>();
+        for (int i = 0; i < chdr.map.Length; i++)
+            if (chdr.map[i].UseCount > 0)
+                list.Add(new PreLoadBlockHelper() { block = i, UseCount = chdr.map[i].UseCount });
+        
+        codec.totalbuffersize = 0;
+
+        foreach (PreLoadBlockHelper dupe in list.OrderByDescending(x => x.UseCount))
+        {
+            if (codec.totalbuffersize + chdr.blocksize > maxbuffersize)
+                break;
+
+            mapentry me = chdr.map[dupe.block];
+            chd_error err = ReadBlock(arrBlockSize, chd, file, me, chdr.compression, codec, (int)chdr.blocksize, true, out byte[] buffOut);
+            if (err != chd_error.CHDERR_NONE)
+                return err;
+
+            me.buffOutCache = buffOut;
+            codec.totalbuffersize += chdr.blocksize;
+        }
+
+        return chd_error.CHDERR_NONE;
+    }
+
+    private void FindRepeatedBlocks(CHDHeader chdr, Stream file)
     {
         int totalFound = 0;
         Parallel.ForEach(chdr.map, me =>
@@ -335,7 +371,7 @@ public class CHD
         //Console.WriteLine($"Total Blocks {chd.map.Length}, Repeat Blocks {totalFound}");
     }
 
-    public chd_error ReadBlock(ArrayPools arraypools,CHD chd, Stream file, mapentry mapEntry, chd_codec[] compression, CHDCodec codec, int buffOutLength, out byte[] buffOut)
+    public chd_error ReadBlock(ArrayPool arrBlockSize,CHD chd, Stream file, mapentry mapEntry, chd_codec[] compression, CHDCodec codec, int buffOutLength, bool preload,  out byte[] buffOut)
     {
         try
         {
@@ -347,7 +383,7 @@ public class CHD
                 lock (file)
                 {
                     //buffIn = ArrayPool<byte>.Shared.Rent((int)mapEntry.length);
-                    buffIn = arraypools.arrBlockSize.Rent();
+                    buffIn = arrBlockSize.Rent();
                     file.Seek((long)mapEntry.offset, SeekOrigin.Begin);
                     file.Read(buffIn, 0, (int)mapEntry.length);
                     Interlocked.Add(ref CHDCommon.processedsize, mapEntry.length);
@@ -364,7 +400,7 @@ public class CHD
                         lock (mapEntry)
                         {
                             //buffOut = ArrayPool<byte>.Shared.Rent((int)blockSize);
-                            buffOut = arraypools.arrBlockSize.Rent();
+                            buffOut = arrBlockSize.Rent();
 
                             if (mapEntry.buffOutCache == null)
                             {
@@ -375,7 +411,7 @@ public class CHD
                                         ret = zlib(buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
                                         break;
                                     case chd_codec.CHD_CODEC_LZMA:
-                                        ret = lzma(arraypools, buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
+                                        ret = lzma(arrBlockSize, buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
                                         break;
                                     case chd_codec.CHD_CODEC_HUFFMAN:
                                         ret = huffman(buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
@@ -384,13 +420,13 @@ public class CHD
                                         ret = flac(buffIn, buffOut, codec, (int)mapEntry.length, (int)blockSize);
                                         break;
                                     case chd_codec.CHD_CODEC_CD_ZLIB:
-                                        ret = cdzlib(arraypools, buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
+                                        ret = cdzlib(arrBlockSize, buffIn, buffOut, (int)mapEntry.length, (int)blockSize, codec);
                                         break;
                                     case chd_codec.CHD_CODEC_CD_LZMA:
-                                        ret = cdlzma(arraypools, buffIn, buffOut, (int)mapEntry.length, (int)blockSize);
+                                        ret = cdlzma(arrBlockSize, buffIn, buffOut, (int)mapEntry.length, (int)blockSize, codec);
                                         break;
                                     case chd_codec.CHD_CODEC_CD_FLAC:
-                                        ret = cdflac(arraypools, buffIn, buffOut, codec, (int)mapEntry.length, (int)blockSize);
+                                        ret = cdflac(arrBlockSize, buffIn, buffOut, codec, (int)mapEntry.length, (int)blockSize);
                                         break;
                                     case chd_codec.CHD_CODEC_AVHUFF:
                                         ret = avHuff(buffIn, buffOut, codec, (int)mapEntry.length, (int)blockSize);
@@ -403,34 +439,33 @@ public class CHD
                                 if (ret != chd_error.CHDERR_NONE)
                                     return ret;
 
-                                // if this block is re-used keep a copy of it.
-                                if (mapEntry.UseCount > dedupe_usage_treshold)
+                                // if this block is re-used keep a copy of it (if enough mem available).
+                                if (mapEntry.UseCount > 0 && !preload && codec.totalbuffersize + blockSize < maxbuffersize)
                                 {
-                                    //mapEntry.buffOutCache = ArrayPool<byte>.Shared.Rent((int)blockSize);
-                                    mapEntry.buffOutCache = arraypools.arrBlockSize.Rent();
+                                    mapEntry.buffOutCache = arrBlockSize.Rent();
                                     Array.Copy(buffOut, 0, mapEntry.buffOutCache, 0, blockSize);
+                                    codec.totalbuffersize += blockSize;
+                                }
+                            }
+                            else
+                            {
+                                buffOut = arrBlockSize.Rent();
+                                Interlocked.Increment(ref CHDCommon.repeatedblocks);
+                                Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
+                                Interlocked.Decrement(ref mapEntry.UseCount);
+
+                                if (mapEntry.UseCount == 0)
+                                {
+                                    arrBlockSize.Return(mapEntry.buffOutCache);
+                                    mapEntry.buffOutCache = null;
+                                    codec.totalbuffersize -= blockSize;
                                 }
 
-                                break;
+                                checkCrc = false;
                             }
                         }
+                        break;
 
-                        lock (mapEntry)
-                        {
-                            buffOut = arraypools.arrBlockSize.Rent();
-                            Interlocked.Increment(ref CHDCommon.repeatedblocks);
-                            Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
-                            Interlocked.Decrement(ref mapEntry.UseCount);
-
-                            if (mapEntry.UseCount == 0)
-                            {
-                                arrBlocksize.Return(mapEntry.buffOutCache);
-                                mapEntry.buffOutCache = null;
-                            }
-
-                            checkCrc = false;
-                            break;
-                        }
                     }
                 case compression_type.COMPRESSION_NONE:
                     {
@@ -439,29 +474,28 @@ public class CHD
                             if (mapEntry.buffOutCache == null)
                             {
                                 Interlocked.Increment(ref CHDCommon.repeatedblocks);
-                                buffOut = arrBlocksize.Rent();
+                                buffOut = arrBlockSize.Rent();
                                 Array.Copy(buffIn, buffOut, buffOutLength);
-                                //buffOut = mapentry.buffIn;
-                                //ArrayPool<byte>.Shared.Return(mapentry.buffIn);
-                                //mapEntry.buffIn = null;
 
-                                if (mapEntry.UseCount > dedupe_usage_treshold)
+                                if (mapEntry.UseCount > 0 && !preload && codec.totalbuffersize + blockSize < maxbuffersize)
                                 {
                                     //mapEntry.buffOutCache = new byte[blockSize];
-                                    mapEntry.buffOutCache = new byte[blockSize];
+                                    mapEntry.buffOutCache = arrBlockSize.Rent();
                                     Array.Copy(buffOut, 0, mapEntry.buffOutCache, 0, blockSize);
+                                    codec.totalbuffersize += blockSize;
                                 }
                                 break;
                             }
 
                             //buffOut = mapEntry.buffOutCache;
-                            buffOut = arraypools.arrBlockSize.Rent();
+                            buffOut = arrBlockSize.Rent();
                             Array.Copy(mapEntry.buffOutCache, 0, buffOut, 0, (int)blockSize);
                             Interlocked.Decrement(ref mapEntry.UseCount);
                             if (mapEntry.UseCount == 0)
                             {
-                                arraypools.arrBlockSize.Return(mapEntry.buffOutCache);
+                                arrBlockSize.Return(mapEntry.buffOutCache);
                                 mapEntry.buffOutCache = null;
+                                codec.totalbuffersize -= blockSize;
                             }
                             checkCrc = false;
                             break;
@@ -470,8 +504,8 @@ public class CHD
 
                 case compression_type.COMPRESSION_MINI:
                     {
-                        buffOut = arraypools.arrBlockSize.Rent();
-                        Array.Clear(buffOut,0,(int)blockSize);
+                        buffOut = arrBlockSize.Rent();
+                        Array.Clear(buffOut, 0, (int)blockSize);
                         byte[] tmp = BitConverter.GetBytes(mapEntry.offset);
                         for (int i = 0; i < 8; i++)
                         {
@@ -488,14 +522,14 @@ public class CHD
 
                 case compression_type.COMPRESSION_SELF:
                     {
-                        chd_error retcs = ReadBlock(arraypools, chd, file, mapEntry.selfMapEntry, compression, codec, buffOutLength, out byte[] buf);
+                        chd_error retcs = ReadBlock(arrBlockSize, chd, file, mapEntry.selfMapEntry, compression, codec, buffOutLength, false, out byte[] buf);
                         buffOut = buf;
                         if (retcs != chd_error.CHDERR_NONE)
                             return retcs;
                         checkCrc = false;
                         break;
                     }
-                        default:
+                default:
                     buffOut = null;
                     return chd_error.CHDERR_DECOMPRESSION_ERROR;
 
@@ -503,7 +537,7 @@ public class CHD
 
             if (buffIn != null)
             {
-                arraypools.arrBlockSize.Return(buffIn);
+                arrBlockSize.Return(buffIn);
                 buffIn = null;
             }
 
@@ -559,12 +593,12 @@ public class CHD
     }
 
 
-    internal chd_error lzma(ArrayPools _arrPool, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength)
+    internal chd_error lzma(ArrayPool arrBlockSize, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength)
     {
-        return lzma(_arrPool, buffIn, 0, buffInLength, buffOut, buffOutLength);
+        return lzma(arrBlockSize, buffIn, 0, buffInLength, buffOut, buffOutLength);
     }
 
-    internal chd_error lzma(ArrayPools _arrPool, byte[] buffIn, int start, int compsize, byte[] buffOut, int buffOutLength)
+    internal chd_error lzma(ArrayPool arrBlockSize, byte[] buffIn, int start, int compsize, byte[] buffOut, int buffOutLength)
     {
         //hacky header creator
         byte[] properties = new byte[5];
@@ -577,7 +611,7 @@ public class CHD
             properties[1 + j] = (Byte)((dictionarySize >> (8 * j)) & 0xFF);
 
         using var memStream = new MemoryStream(buffIn, start, compsize);
-        using Stream compStream = new LzmaStream(properties, memStream, _arrPool.arrBlockSize);
+        using Stream compStream = new LzmaStream(properties, memStream, arrBlockSize);
         int bytesRead = 0;
         while (bytesRead < buffOutLength)
         {
@@ -657,7 +691,7 @@ public class CHD
 
     private static readonly byte[] s_cd_sync_header = new byte[] { 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00 };
 
-    internal chd_error cdzlib(ArrayPools arrPools, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength)
+    internal chd_error cdzlib(ArrayPool arrBlockSize, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength, CHDCodec codec)
     {
         /* determine header bytes */
         int frames = buffOutLength / CD_FRAME_SIZE;
@@ -672,30 +706,26 @@ public class CHD
 
         //byte[] bSector = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SECTOR_DATA);
         //byte[] bSubcode = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SUBCODE_DATA);
-        byte[] bSector = arrPools.arrBSector.Rent();
-        byte[] bSubcode = arrPools.arrBSubcode.Rent();
+        codec.bSector ??= new byte[frames * CD_MAX_SECTOR_DATA];
+        codec.bSubcode ??= new byte[frames * CD_MAX_SUBCODE_DATA];
 
-        chd_error err = zlib(buffIn, (int)header_bytes, complen_base, bSector, frames * CD_MAX_SECTOR_DATA);
+        chd_error err = zlib(buffIn, (int)header_bytes, complen_base, codec.bSector, frames * CD_MAX_SECTOR_DATA);
         if (err != chd_error.CHDERR_NONE)
         {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
         }
 
-        err = zlib(buffIn, header_bytes + complen_base, buffInLength - header_bytes - complen_base, bSubcode, frames * CD_MAX_SUBCODE_DATA);
+        err = zlib(buffIn, header_bytes + complen_base, buffInLength - header_bytes - complen_base, codec.bSubcode, frames * CD_MAX_SUBCODE_DATA);
         if (err != chd_error.CHDERR_NONE)
         {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
         }
 
         /* reassemble the data */
         for (int framenum = 0; framenum < frames; framenum++)
         {
-            Array.Copy(bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
-            Array.Copy(bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
+            Array.Copy(codec.bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
+            Array.Copy(codec.bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
 
             // reconstitute the ECC data and sync header 
             int sectorStart = framenum * CD_FRAME_SIZE;
@@ -705,12 +735,10 @@ public class CHD
                 cdRom.ecc_generate(buffOut, sectorStart);
             }
         }
-        arrPools.arrBSector.Return(bSector);
-        arrPools.arrBSubcode.Return(bSubcode);
         return chd_error.CHDERR_NONE;
     }
 
-    internal chd_error cdlzma(ArrayPools arrPools, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength)
+    internal chd_error cdlzma(ArrayPool arrBlockSize, byte[] buffIn, byte[] buffOut, int buffInLength, int buffOutLength, CHDCodec codec)
     {
         /* determine header bytes */
         int frames = buffOutLength / CD_FRAME_SIZE;
@@ -723,33 +751,29 @@ public class CHD
         if (complen_bytes > 2)
             complen_base = (complen_base << 8) | buffIn[ecc_bytes + 2];
 
-        byte[] bSector = arrCDSector.Rent();
-        byte[] bSubcode = arrCDSubcode.Rent();
+        codec.bSector ??= new byte[frames * CD_MAX_SECTOR_DATA];
+        codec.bSubcode ??= new byte[frames * CD_MAX_SUBCODE_DATA];
 
         //byte[] bSector = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SECTOR_DATA);
         //byte[] bSubcode = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SUBCODE_DATA);
 
-        chd_error err = lzma( arrPools, buffIn, header_bytes, complen_base, bSector, frames * CD_MAX_SECTOR_DATA);
+        chd_error err = lzma(arrBlockSize, buffIn, header_bytes, complen_base, codec.bSector, frames * CD_MAX_SECTOR_DATA);
         if (err != chd_error.CHDERR_NONE)
         {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
         }
 
-        err = zlib(buffIn, header_bytes + complen_base, buffInLength - header_bytes - complen_base, bSubcode, frames * CD_MAX_SUBCODE_DATA);
+        err = zlib(buffIn, header_bytes + complen_base, buffInLength - header_bytes - complen_base, codec.bSubcode, frames * CD_MAX_SUBCODE_DATA);
         if (err != chd_error.CHDERR_NONE)
         {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
         }
 
         /* reassemble the data */
         for (int framenum = 0; framenum < frames; framenum++)
         {
-            Array.Copy(bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
-            Array.Copy(bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
+            Array.Copy(codec.bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
+            Array.Copy(codec.bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
 
             // reconstitute the ECC data and sync header 
             int sectorStart = framenum * CD_FRAME_SIZE;
@@ -759,44 +783,32 @@ public class CHD
                 cdRom.ecc_generate(buffOut, sectorStart);
             }
         }
-        arrPools.arrBSector.Return(bSector);
-        arrPools.arrBSubcode.Return(bSubcode);
         return chd_error.CHDERR_NONE;
     }
 
-    internal chd_error cdflac(ArrayPools arrPools, byte[] buffIn, byte[] buffOut, CHDCodec codec, int buffInLength, int buffOutLength)
+    internal chd_error cdflac(ArrayPool arrBlockSize, byte[] buffIn, byte[] buffOut, CHDCodec codec, int buffInLength, int buffOutLength)
     {
         int frames = buffOutLength / CD_FRAME_SIZE;
 
-        byte[] bSector = arrPools.arrBSector.Rent();
-        byte[] bSubcode = arrPools.arrBSubcode.Rent();
-        //byte[] bSector = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SECTOR_DATA);
-        //byte[] bSubcode = ArrayPool<byte>.Shared.Rent(frames * CD_MAX_SUBCODE_DATA);
+        codec.bSector ??= new byte[frames * CD_MAX_SECTOR_DATA];
+        codec.bSubcode ??= new byte[frames * CD_MAX_SUBCODE_DATA];
 
-        chd_error err = flac(buffIn, 0, bSector, true, codec, buffInLength, frames * CD_MAX_SECTOR_DATA, out int pos);
+        chd_error err = flac(buffIn, 0, codec.bSector, true, codec, buffInLength, frames * CD_MAX_SECTOR_DATA, out int pos);
         if (err != chd_error.CHDERR_NONE)
-        {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
-        }
 
-        err = zlib(buffIn, pos, buffInLength - pos, bSubcode, frames * CD_MAX_SUBCODE_DATA);
+        err = zlib(buffIn, pos, buffInLength - pos, codec.bSubcode, frames * CD_MAX_SUBCODE_DATA);
         if (err != chd_error.CHDERR_NONE)
         {
-            arrPools.arrBSector.Return(bSector);
-            arrPools.arrBSubcode.Return(bSubcode);
             return err;
         }
 
         /* reassemble the data */
         for (int framenum = 0; framenum < frames; framenum++)
         {
-            Array.Copy(bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
-            Array.Copy(bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
+            Array.Copy(codec.bSector, framenum * CD_MAX_SECTOR_DATA, buffOut, framenum * CD_FRAME_SIZE, CD_MAX_SECTOR_DATA);
+            Array.Copy(codec.bSubcode, framenum * CD_MAX_SUBCODE_DATA, buffOut, framenum * CD_FRAME_SIZE + CD_MAX_SECTOR_DATA, CD_MAX_SUBCODE_DATA);
         }
-        arrPools.arrBSector.Return(bSector);
-        arrPools.arrBSubcode.Return(bSubcode);
         return chd_error.CHDERR_NONE;
     }
     /*
@@ -982,13 +994,13 @@ public class CHD
             return chd_error.CHDERR_NONE;
         }
 
-        BitStream bitbuf = new BitStream(buffIn, (int)buffInOffset);
-        HuffmanDecoder m_audiohi_decoder = new HuffmanDecoder(256, 16, bitbuf);
-        HuffmanDecoder m_audiolo_decoder = new HuffmanDecoder(256, 16, bitbuf);
-
-        // if we have a non-zero tree size, extract the trees
+        HuffmanDecoder m_audiohi_decoder = null;
+        HuffmanDecoder m_audiolo_decoder = null;
         if (treesize != 0)
         {
+            BitStream bitbuf = new BitStream(buffIn, (int)buffInOffset);
+            m_audiohi_decoder = new HuffmanDecoder(256, 16, bitbuf);
+            m_audiolo_decoder = new HuffmanDecoder(256, 16, bitbuf);
             huffman_error hufferr = m_audiohi_decoder.ImportTreeRLE();
             if (hufferr != huffman_error.HUFFERR_NONE)
                 return chd_error.CHDERR_INVALID_DATA;
@@ -1031,7 +1043,7 @@ public class CHD
                 // otherwise, Huffman-decode the data
                 else
                 {
-                    bitbuf = new BitStream(buffIn, (int)buffInOffset);
+                    BitStream bitbuf = new BitStream(buffIn, (int)buffInOffset);
                     m_audiohi_decoder.AssignBitStream(bitbuf);
                     m_audiolo_decoder.AssignBitStream(bitbuf);
                     for (int sampnum = 0; sampnum < samples; sampnum++)

@@ -8,9 +8,11 @@ namespace CHDSharpLib
         internal AudioPCMConfig FLAC_settings = null;
         internal AudioDecoder FLAC_audioDecoder = null;
         internal AudioBuffer FLAC_audioBuffer = null;
-
-
         internal AudioPCMConfig AVHUFF_settings = null;
         internal AudioDecoder AVHUFF_audioDecoder = null;
+
+        internal byte[] bSector;
+        internal byte[] bSubcode;
+        internal ulong totalbuffersize;
     }
 }
