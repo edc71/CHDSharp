@@ -64,18 +64,17 @@ public class mapentry
 public class CHD
 {
 
-    //private int dedupe_usage_treshold = 25;
+    //maximum mem used for caching dupe blocks
+    const ulong maxbuffersize = 1 * 1024 * 1024 * 1024;
+    private readonly uint[] HeaderLengths = new uint[] { 0, 76, 80, 120, 108, 124 };
+    private readonly byte[] id = { (byte)'M', (byte)'C', (byte)'o', (byte)'m', (byte)'p', (byte)'r', (byte)'H', (byte)'D' };
 
     public void TestCHD(CHD chd, string filename, int tasks)
     {
-        //Console.WriteLine("");
-        //Console.WriteLine($"Testing :{filename}");
         using (Stream s = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read, 32768))
         {
             if (!CheckHeader(s, out uint length, out uint version))
                 return;
-
-            //Console.WriteLine($@"CHD Version {version}");
 
             chd_error valid = chd_error.CHDERR_INVALID_DATA;
             CHDHeaders chdheaders = new CHDHeaders(); ; 
@@ -107,11 +106,6 @@ public class CHD
                 SendMessage($"Error Reading Header: {valid}", ConsoleColor.Red);
             }
 
-            //if (((ulong)chd.totalblocks * (ulong)chd.blocksize) != chd.totalbytes)
-            //{
-            //    SendMessage($"{(ulong)chd.totalblocks * (ulong)chd.blocksize} != {chd.totalbytes}", ConsoleColor.Cyan);
-            //}
-
             FindRepeatedBlocks(chdheader,s);
 
             valid = DecompressDataParallel(chd, s, chdheader, tasks);
@@ -119,7 +113,7 @@ public class CHD
             {
                 Console.WriteLine("File: " + filename);
                 SendMessage($"Data Decompress Failed: {valid}", ConsoleColor.Red);
-                Console.WriteLine("key");
+                Console.WriteLine("any key");
                 Console.Read();
                 return;
             }
@@ -133,8 +127,6 @@ public class CHD
             }
 
             Interlocked.Increment(ref CHDCommon.processedfiles);
-
-            //SendMessage($"Valid", ConsoleColor.Green);
         }
     }
 
@@ -145,9 +137,6 @@ public class CHD
         Console.WriteLine(msg);
         Console.ForegroundColor = consoleColor;
     }
-
-    private readonly uint[] HeaderLengths = new uint[] { 0, 76, 80, 120, 108, 124 };
-    private readonly byte[] id = { (byte)'M', (byte)'C', (byte)'o', (byte)'m', (byte)'p', (byte)'r', (byte)'H', (byte)'D' };
 
     public bool CheckHeader(Stream file, out uint length, out uint version)
     {
@@ -200,7 +189,7 @@ public class CHD
         });
 
         Task[] consumerThread = new Task[taskCount];
-        
+
         for (int i = 0; i < taskCount; i++)
         {
             consumerThread[i] = Task.Factory.StartNew((i) =>
@@ -227,7 +216,6 @@ public class CHD
 
                     long tmp = GC.GetTotalMemory(false);
                     if (tmp > CHDCommon.maxmem) { CHDCommon.maxmem = tmp; }
-
                 }
             }, i);
         }
@@ -292,8 +280,6 @@ public class CHD
         return chd_error.CHDERR_NONE;
     }
 
-    //maximum mem used for caching dupe blocks
-    const ulong maxbuffersize = 1 * 1024 * 1024 * 1024;
     
     private chd_error PreLoadRepeatedBlocks(CHD chd, CHDHeader chdr, Stream file, ArrayPool arrBlockSize, CHDCodec codec)
     {
@@ -611,7 +597,6 @@ public class CHD
         return chd_error.CHDERR_NONE;
     }
 
-
     internal chd_error flac(byte[] buffIn, byte[] buffOut, CHDCodec codec, int buffInLength, int buffOutLength)
     {
         byte endianType = buffIn[0];
@@ -619,7 +604,6 @@ public class CHD
         bool swapEndian = (endianType == 'B'); //'L'ittle / 'B'ig
         return flac(buffIn, 1, buffOut, swapEndian, codec, buffInLength, buffOutLength, out _);
     }
-
 
     internal chd_error flac(byte[] buffIn, int start, byte[] buffOut, bool swapEndian, CHDCodec codec, int buffInLength, int buffOutLength, out int srcPos)
     {
@@ -861,10 +845,8 @@ public class CHD
         buffOut[10] = (byte)(videoHeight >> 8);
         buffOut[11] = (byte)videoHeight;
         destOffset += 12;
-
-
-
         uint metaDestStart = destOffset;
+
         if (metaDataLength > 0)
         {
             Array.Copy(buffIn, (int)buffInIndex, buffOut, (int)metaDestStart, (int)metaDataLength);
@@ -884,7 +866,6 @@ public class CHD
         // decode the audio channels
         if (audioChannels > 0)
         {
-            // decode the audio
             chd_error err = DecodeAudio(audioChannels, audioSamplesPerBlock, buffIn, buffInIndex, audioHuffmanTreeSize, audioChannelCompressedSize, buffOut, audioChannelDestStart, codec);
             if (err != chd_error.CHDERR_NONE)
                 return err;
@@ -1040,8 +1021,6 @@ public class CHD
         return chd_error.CHDERR_NONE;
     }
 
-
-
     private chd_error decodeVideo(uint width, uint height, byte[] buffIn, uint buffInOffset, uint buffInLength, byte[] buffOut, uint buffOutOffset, uint dstride)
     {
         // if the high bit of the first byte is set, we decode losslessly
@@ -1050,8 +1029,6 @@ public class CHD
         else
             return chd_error.CHDERR_INVALID_DATA;
     }
-
-
 
     private chd_error DecodeVideoLossless(uint width, uint height, byte[] buffIn, uint buffInOffset, uint buffInLength, byte[] buffOut, uint buffOutOffset, uint dstride)
     {
