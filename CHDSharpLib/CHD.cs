@@ -173,7 +173,6 @@ public class CHD
     public chd_error DecompressDataParallel(CHD chd, Stream file, CHDHeader chdheader, int tasks)
     {
         ArrayPool arrBlockSize = new ArrayPool(chdheader.blocksize);
-        //using BinaryReader br = new BinaryReader(file, Encoding.UTF8, true);
 
         CHDCodec preloadcodec = new CHDCodec();
         chd_error err = PreLoadRepeatedBlocks(chd, chdheader, file, arrBlockSize, preloadcodec);
@@ -270,8 +269,6 @@ public class CHD
 
         Task.WaitAll(cleanupThread);
 
-        //Console.WriteLine($"Verifying, 100% complete.");
-        
         arrBlockSize.Destroy();
         arrBlockSize = null;
 
@@ -298,8 +295,6 @@ public class CHD
     //maximum mem used for caching dupe blocks
     const ulong maxbuffersize = 1 * 1024 * 1024 * 1024;
     
-    //private ulong totalbuffersize = 0;
-
     private chd_error PreLoadRepeatedBlocks(CHD chd, CHDHeader chdr, Stream file, ArrayPool arrBlockSize, CHDCodec codec)
     {
         List<PreLoadBlockHelper> list = new List<PreLoadBlockHelper>();
